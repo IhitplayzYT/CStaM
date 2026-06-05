@@ -1,0 +1,6 @@
+mod cstam;
+mod helper;
+
+fn main() {
+    println!("Hello, world!");
+}
