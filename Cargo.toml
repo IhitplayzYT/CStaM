@@ -8,3 +8,4 @@ license-file = "LICENSE"
 
 [dependencies]
 regex = "1.12.3"
+sha2 = "0.10"
