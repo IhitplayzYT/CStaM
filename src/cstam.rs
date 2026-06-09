@@ -22,11 +22,6 @@ const HASH_SIZE: usize = 5;
             }
 
             let is_async: HashSet<_> = async_fns.iter().collect();
-            println!("Async set = {:?}",is_async);
-
-
-
-
 
             let mut start = 0;
             let mut Future_Map:HashMap<String,String> = HashMap::new();
@@ -52,11 +47,17 @@ const HASH_SIZE: usize = 5;
 
                 println!("Cur fn = {fn_name}");
 
+                let mut ret_type = "".to_string();
+                let k = temp;
+                while temp > 0 && &doc[start+pos..temp+start+pos] != "async "{
+                    temp -= 1;
+                }
+                ret_type += &doc[temp+start+pos..k+start+pos];
+
                 let rel_off = doc[start+pos..].find("{").unwrap_or(l);
                 if rel_off >= l {
                     break;
                 }
-
 
                 let mut stack = 1;
                 let mut k = start + pos + rel_off+1;
@@ -74,7 +75,7 @@ const HASH_SIZE: usize = 5;
                 Fn_Body_Map.insert(fn_name.clone(),fn_body.clone());
 
                     let names = Get_Fn_Name_Ordered(fn_body.clone(), &is_async);
-                    let (poll_enum,state_enum,future_struct) = ("typedef enum e_PollStatus{\nPOLL_PENDING,\nPOLL_READY\n} PollStatus;\n\ntypedef struct s_PollResult{\nPollStatus status;\n} PollResult;\n".to_string(),Gen_Enum(fn_name.clone(),fn_body.clone(),names.clone()),Gen_Future(fn_name.clone(), fn_body.clone(), &is_async, names.clone(),&mut Future_Map,&Fn_Body_Map));
+                    let (poll_enum,state_enum,future_struct) = (Gen_Poll_Type(fn_name.clone(),ret_type),Gen_Enum(fn_name.clone(),fn_body.clone(),names.clone()),Gen_Future(fn_name.clone(), fn_body.clone(), &is_async, names.clone(),&mut Future_Map,&Fn_Body_Map));
                     Future_Map.insert(fn_name.clone(), future_struct.clone());
                     println!("Enum  => {}",state_enum);
                     println!("Future  => {}",future_struct);
@@ -83,6 +84,10 @@ const HASH_SIZE: usize = 5;
                 start = fn_end;
             }
         }
+    }
+
+    pub fn Gen_Poll_Type(fn_name: String,ret_type: String) -> String{ 
+        format!("typedef enum e_PollStatus{{\nPOLL_PENDING,\nPOLL_READY\n}} PollStatus;\n\ntypedef struct s_PollResult{{\nPollStatus status;\n{ret_type} result;\n}} {fn_name}_PollResult;\n")
     }
 
     pub fn hashed_digest(digest:String) -> String {
@@ -158,14 +163,44 @@ const HASH_SIZE: usize = 5;
         ret.replace("{}", &enum_contents)
     }
 
-    pub fn Gen_Poll(fn_name:String,fn_body:String,is_async: & HashSet<&String>,names: Vec<String>,future_map: &mut HashMap<String,String>,s_enum:String,s_Future: String) -> String {
-        let ret  = "Poll".to_string();
+    pub fn Gen_Poll(fn_name:String,ret_type: String,fn_body:String,is_async: & HashSet<&String>,names: Vec<String>,future_map: &mut HashMap<String,String>,s_enum:String,s_Future: String) -> String {
+        let ret  = format!("
+        {fn_name}_PollResult {fn_name}_poll(Future_{fn_name} *self) {{
+            {fn_name}_PollResult ret;
+            switch (self->state) {{  
+            {{}}
+            }}
 
+        }}");
 
+        let mut ladder = "".to_string();
 
+        /*
+        Gen code for Start
+        */
 
+        for i in s_enum.split("\n").skip(1){
+            if i.ends_with(",") {
+                let e_var = &i[..i.len() - 1];
+                let e_fn_name = &e_var[7..];
+                // TODO: FIXME: We need the async fn assigned type map ....ts is a big issue
+                ladder += &format!("
+                    case {e_var}:{{
+                        ret = {e_fn_name}_poll(&self->fn_{e_fn_name});
+                        if (ret.result = POLL_PENDING) return ret;
+                        self->
 
-        ret
+                    }}
+                ")
+
+            }
+        }
+
+        /*
+        Gen code for Done 
+        */
+
+        ret.replace("{}", &ladder)
     }
 
 pub fn split_args(args: &str) -> Vec<String> {
