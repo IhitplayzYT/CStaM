@@ -2,7 +2,7 @@
 
 pub mod Cstam {
 const HASH_SIZE: usize = 5;
-    use std::{collections::{HashMap, HashSet}};
+    use std::{collections::{HashMap, HashSet}, fs::TryLockError::WouldBlock};
     use regex::Regex;
     use sha2::{Digest, Sha256};
 
@@ -80,7 +80,8 @@ const HASH_SIZE: usize = 5;
                     println!("Enum  => {}",state_enum);
                     println!("Future  => {}",future_struct);
                     println!("Poll Enum  => {}",poll_enum);
-
+                    let poll_fn = Gen_Poll(fn_name, fn_body, &is_async, state_enum, future_struct);
+                    println!("{poll_fn}");
                 start = fn_end;
             }
         }
@@ -163,7 +164,7 @@ const HASH_SIZE: usize = 5;
         ret.replace("{}", &enum_contents)
     }
 
-    pub fn Gen_Poll(fn_name:String,ret_type: String,fn_body:String,is_async: & HashSet<&String>,names: Vec<String>,future_map: &mut HashMap<String,String>,s_enum:String,s_Future: String) -> String {
+    pub fn Gen_Poll(fn_name:String,fn_body:String,is_async: & HashSet<&String>,s_enum:String,s_Future: String) -> String {
         let ret  = format!("
         {fn_name}_PollResult {fn_name}_poll(Future_{fn_name} *self) {{
             {fn_name}_PollResult ret;
@@ -178,6 +179,71 @@ const HASH_SIZE: usize = 5;
         /*
         Gen code for Start
         */
+
+        /*
+         *      {
+         *          printf("");
+         *          let y = 9;
+         *          let x = a1(y);
+         *          if x > 2 {
+         *              return x;
+         *          }
+         *          return a2(x)
+         *      }
+         * 
+         * 
+         */
+
+        let mut buff = "".to_string();
+        let mut iop = 0;
+        for i in  fn_body.split("\n").skip(1){
+        // TODO: FIXME: The buff is generating repeats
+           for j in is_async{
+                if !i.contains(*j){
+                    if let Some(idx) = i.find("return"){
+                        let mut fn_ret = i[idx+7..].trim();
+                        fn_ret = &fn_ret[..fn_ret.len() - 1];
+                        buff += &format!("self->state = Done;\nreturn ({fn_name}_PollResult){{.result = {fn_ret},.status = POLL_READY}};\n");
+                    } else{
+                        buff += i;
+                        buff += "\n";
+                    }
+                }else{
+                    if let Some(idx) = i.find(*j){
+                    let lp = idx + j.len();
+                    let rp = lp + i[lp..].find(")").unwrap();
+                    
+                    let params = split_args(&i[lp..=rp]);
+                    let p_buff = params.iter().map(|x| if s_Future.contains(&(" ".to_string() + x + ";")) {format!("self->{x},")} else {x.clone()+","} ).collect::<Vec<String>>().join(" ");
+                    let p_buff = &p_buff[..p_buff.len() - 1];
+                    if iop == 0{
+                    ladder += &format!("
+                    case Start:{{
+                    {buff}
+                    self->fn_{j} = {j}{p_buff};
+                    self->state = Waiting{j}; 
+                    }}
+                    ");}else{
+                    ladder += &format!("
+                    case Waiting{j}:{{
+                    ret = {j}_poll(&self->fn_{j});
+                    if (ret.status == POLL_PENDING) return ret;
+                    {buff}
+                    self->fn_{j} = {j}({p_buff});
+                    self->state = Waiting{j};
+                    }}
+                    ");}
+                    }
+
+                    iop +=1;
+                    buff.clear();
+                }
+           } 
+
+        }
+
+
+        /*
 
         for i in s_enum.split("\n").skip(1){
             if i.ends_with(",") {
@@ -196,9 +262,20 @@ const HASH_SIZE: usize = 5;
             }
         }
 
+        */
+
         /*
         Gen code for Done 
         */
+
+        ladder += &format!("
+        case DONE:{{
+            return ({fn_name}_PollResult){{
+                .status = POLL_READY,
+                .result = self->result
+            }};
+        }}
+        ");
 
         ret.replace("{}", &ladder)
     }
