@@ -2,7 +2,7 @@
 
 pub mod Cstam {
 const HASH_SIZE: usize = 5;
-    use std::{collections::{HashMap, HashSet}, fs::TryLockError::WouldBlock};
+    use std::{collections::{HashMap, HashSet}, fmt::format, fs::TryLockError::WouldBlock};
     use regex::Regex;
     use sha2::{Digest, Sha256};
 
@@ -130,7 +130,6 @@ const HASH_SIZE: usize = 5;
     pub fn Gen_Future(fn_name:String,fn_body:String,is_async: & HashSet<&String>,names: Vec<String>,future_map: &mut HashMap<String,String>,fn_body_map: &HashMap<String,String>) -> String {
         let ret = format!("typedef struct s_Future_{} {{\ne_State_{}_{} state;\n{{}}\n}} Future_{};\n",fn_name.clone(),fn_name.clone(),&hashed_digest(fn_body.clone())[..HASH_SIZE],fn_name.clone()); 
         let mut s_future = "".to_string();
-        let mut is_async = is_async.clone();
         for i in &names {
                 if future_map.contains_key(i){
                 }else{
@@ -153,9 +152,9 @@ const HASH_SIZE: usize = 5;
                 let n = counts.entry(name.clone()).or_insert(0);
                 *n += 1;
                 if *n == 1 {
-                    format!("Waiting{}", name.to_uppercase())
+                    format!("Waiting{}", name)
                 } else {
-                    format!("Waiting{}{}", name.to_uppercase(), *n)
+                    format!("Waiting{}{}", name, *n)
                 }
             })
             .collect::<Vec<_>>();
@@ -167,8 +166,9 @@ const HASH_SIZE: usize = 5;
     pub fn Gen_Poll(fn_name:String,fn_body:String,is_async: & HashSet<&String>,s_enum:String,s_Future: String) -> String {
         let ret  = format!("
         {fn_name}_PollResult {fn_name}_poll(Future_{fn_name} *self) {{
-            {fn_name}_PollResult ret;
-            switch (self->state) {{  
+            {fn_name}_PollResult ret = ({fn_name}_PollResult){{.status = POLL_PENDING}};
+            while (1) {{
+                switch (self->state) {{  
             {{}}
             }}
 
@@ -197,9 +197,16 @@ const HASH_SIZE: usize = 5;
         let mut buff = "".to_string();
         let mut iop = 0;
         for i in  fn_body.split("\n").skip(1){
-        // TODO: FIXME: The buff is generating repeats
+        let mut has_async = "".to_string();
            for j in is_async{
-                if !i.contains(*j){
+            if i.contains(*j){
+                has_async = j.to_string();
+                break;
+            }
+           }
+           println!("{has_async}");
+
+                if has_async.is_empty(){
                     if let Some(idx) = i.find("return"){
                         let mut fn_ret = i[idx+7..].trim();
                         fn_ret = &fn_ret[..fn_ret.len() - 1];
@@ -209,39 +216,112 @@ const HASH_SIZE: usize = 5;
                         buff += "\n";
                     }
                 }else{
-                    if let Some(idx) = i.find(*j){
-                    let lp = idx + j.len();
-                    let rp = lp + i[lp..].find(")").unwrap();
+                let (mut lp,mut rp) = (0,0);
+                    if let Some(idx) = i.find(&has_async){
+                     lp = idx + has_async.len()+1;
+                     rp = lp + i[lp..].find(")").unwrap();
+                    }
                     
-                    let params = split_args(&i[lp..=rp]);
+                    let params = split_args(&i[lp..rp]);
                     let p_buff = params.iter().map(|x| if s_Future.contains(&(" ".to_string() + x + ";")) {format!("self->{x},")} else {x.clone()+","} ).collect::<Vec<String>>().join(" ");
                     let p_buff = &p_buff[..p_buff.len() - 1];
+
+
+
+                    
+                    let mut next_state = "".to_string();
+
+                    let sp = s_enum.find(&format!("Waiting{has_async}")).unwrap() + 7 + has_async.len()+1;
+                    if let Some(z) = s_enum[sp..].find(","){
+                        println!("{} {}",sp+1,sp+z);
+                        next_state += &s_enum[sp +1..sp+z];
+                    }else{
+                    next_state = format!("Done");
+                    }
+                    // waitinga1
+                    //         
+
+                    next_state = next_state.trim().to_string();
+                    let mut next_fn = "".to_string();
+                    let mut next_p_buff = "".to_string();
+                    let mut params = vec![];
+
+
+                    if &next_state[..] != "Done" {
+                    next_fn = next_state[7..].to_string();
+                    let k = fn_body[fn_body.find(&i).unwrap()+i.len()..].to_string();
+
+                    if let Some(idx) = k.find(&next_fn){
+                     lp = idx + next_fn.len()+1;
+                     rp = lp + k[lp..].find(")").unwrap();
+                    }
+                     params = split_args(&k[lp..rp]);
+                     next_p_buff = params.iter().map(|x| if s_Future.contains(&(" ".to_string() + x + ";")) {format!("self->{x},")} else {x.clone()+","} ).collect::<Vec<String>>().join(" ");
+                     next_p_buff = next_p_buff[..next_p_buff.len() - 1].to_string();
+
+                     println!("{next_fn} {params:?} {next_p_buff:?}");
+                }
+
+
+                // TODO: FIXME: New issue is that we need to assignt he results of the async fn to the varib in the self...eg self->r1 = ret.result
+                if next_p_buff.contains("self->"){
+                    
+
+
+                }
+
+
                     if iop == 0{
                     ladder += &format!("
                     case Start:{{
                     {buff}
-                    self->fn_{j} = {j}{p_buff};
-                    self->state = Waiting{j}; 
+                    self->fn_{has_async} = {has_async}({p_buff});
+                    self->state = Waiting{has_async}; 
+                    continue;
                     }}
-                    ");}else{
+
+                    case Waiting{has_async}:{{
+                    ret = {has_async}_poll(&self->fn_{has_async});
+                    if (ret.status == POLL_PENDING) {{return ret;}}
+                    {buff}
+                    self->fn_{next_fn} = {next_fn}({next_p_buff});
+                    self->state = {next_state};
+                    continue;
+                    }}
+                    ");
+                    
+                        
+                }
+                else if &next_state[..] == "Done"{
+                   ladder += &format!("
+                    case Waiting{has_async}:{{
+                    ret = {has_async}_poll(&self->fn_{has_async});
+                    if (ret.status == POLL_PENDING) {{return ret;}}
+                    {buff}
+                    self->state = {next_state};
+                    continue;
+                    }}
+                   ") 
+                }
+                else{
+
+
                     ladder += &format!("
-                    case Waiting{j}:{{
-                    ret = {j}_poll(&self->fn_{j});
+                    case Waiting{has_async}:{{
+                    ret = {has_async}_poll(&self->fn_{has_async});
                     if (ret.status == POLL_PENDING) return ret;
                     {buff}
-                    self->fn_{j} = {j}({p_buff});
-                    self->state = Waiting{j};
+                    self->fn_{next_fn} = {next_fn}({next_p_buff});
+                    self->state = {next_state};
+                    continue;
                     }}
                     ");}
-                    }
 
                     iop +=1;
                     buff.clear();
                 }
-           } 
 
         }
-
 
         /*
 
@@ -249,7 +329,6 @@ const HASH_SIZE: usize = 5;
             if i.ends_with(",") {
                 let e_var = &i[..i.len() - 1];
                 let e_fn_name = &e_var[7..];
-                // TODO: FIXME: We need the async fn assigned type map ....ts is a big issue
                 ladder += &format!("
                     case {e_var}:{{
                         ret = {e_fn_name}_poll(&self->fn_{e_fn_name});
@@ -269,12 +348,13 @@ const HASH_SIZE: usize = 5;
         */
 
         ladder += &format!("
-        case DONE:{{
-            return ({fn_name}_PollResult){{
-                .status = POLL_READY,
-                .result = self->result
-            }};
-        }}
+                    case DONE:{{
+                        return ({fn_name}_PollResult){{
+                            .status = POLL_READY,
+                            .result = self->result
+                        }};
+                    }}
+                }}
         ");
 
         ret.replace("{}", &ladder)
