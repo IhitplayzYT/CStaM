@@ -165,14 +165,14 @@ const HASH_SIZE: usize = 5;
 
     pub fn Gen_Poll(fn_name:String,fn_body:String,is_async: & HashSet<&String>,s_enum:String,s_Future: String) -> String {
         let ret  = format!("
-        {fn_name}_PollResult {fn_name}_poll(Future_{fn_name} *self) {{
-            {fn_name}_PollResult ret = ({fn_name}_PollResult){{.status = POLL_PENDING}};
-            while (1) {{
-                switch (self->state) {{  
-            {{}}
-            }}
+{fn_name}_PollResult {fn_name}_poll(Future_{fn_name} *self) {{
+    {fn_name}_PollResult ret = ({fn_name}_PollResult){{.status = POLL_PENDING}};
+    while (1) {{
+        switch (self->state) {{  
+    {{}}
+    }}
 
-        }}");
+}}");
 
         let mut ladder = "".to_string();
 
@@ -196,6 +196,8 @@ const HASH_SIZE: usize = 5;
 
         let mut buff = "".to_string();
         let mut iop = 0;
+        let mut ASSIGN = "".to_string();
+        let fn_map = parse_calls(&fn_body);
         for i in  fn_body.split("\n").skip(1){
         let mut has_async = "".to_string();
            for j in is_async{
@@ -204,7 +206,6 @@ const HASH_SIZE: usize = 5;
                 break;
             }
            }
-           println!("{has_async}");
 
                 if has_async.is_empty(){
                     if let Some(idx) = i.find("return"){
@@ -225,9 +226,7 @@ const HASH_SIZE: usize = 5;
                     let params = split_args(&i[lp..rp]);
                     let p_buff = params.iter().map(|x| if s_Future.contains(&(" ".to_string() + x + ";")) {format!("self->{x},")} else {x.clone()+","} ).collect::<Vec<String>>().join(" ");
                     let p_buff = &p_buff[..p_buff.len() - 1];
-
-
-
+                    
                     
                     let mut next_state = "".to_string();
 
@@ -238,8 +237,6 @@ const HASH_SIZE: usize = 5;
                     }else{
                     next_state = format!("Done");
                     }
-                    // waitinga1
-                    //         
 
                     next_state = next_state.trim().to_string();
                     let mut next_fn = "".to_string();
@@ -264,63 +261,63 @@ const HASH_SIZE: usize = 5;
 
 
                 // TODO: FIXME: New issue is that we need to assignt he results of the async fn to the varib in the self...eg self->r1 = ret.result
-                if next_p_buff.contains("self->"){
-                    
-
+                for i in &fn_map {
+                    if i.function_name == has_async{
+                        if let Some(var) = i.variable_name.clone(){
+                            ASSIGN += &format!("\n\t\tself->{var}={has_async}_ret.result;");
+                        }
+                        break;
+                    }
 
                 }
 
 
                     if iop == 0{
                     ladder += &format!("
-                    case Start:{{
-                    {buff}
-                    self->fn_{has_async} = {has_async}({p_buff});
-                    self->state = Waiting{has_async}; 
-                    continue;
-                    }}
+            case Start :{{
+                {}self->fn_{has_async} = {has_async}({p_buff});{ASSIGN}
+                self->state = Waiting{has_async}; 
+                continue;
+            }}
 
-                    case Waiting{has_async}:{{
-                    ret = {has_async}_poll(&self->fn_{has_async});
-                    if (ret.status == POLL_PENDING) {{return ret;}}
-                    {buff}
-                    self->fn_{next_fn} = {next_fn}({next_p_buff});
-                    self->state = {next_state};
-                    continue;
-                    }}
-                    ");
+            case Waiting{has_async} :{{
+                {has_async}_PollResult {has_async}_ret = {has_async}_poll(&self->fn_{has_async});
+                if ({has_async}_ret.status == POLL_PENDING) {{return ret;}}{}{ASSIGN}
+                self->fn_{next_fn} = {next_fn}({next_p_buff});
+                self->state = {next_state};
+                continue;
+            }}
+                    ",if buff.is_empty(){buff.clone()} else {"\n".to_string()+&buff},if buff.is_empty(){buff.clone()} else {"\n".to_string()+&buff});
                     
                         
                 }
                 else if &next_state[..] == "Done"{
-                   ladder += &format!("
-                    case Waiting{has_async}:{{
-                    ret = {has_async}_poll(&self->fn_{has_async});
-                    if (ret.status == POLL_PENDING) {{return ret;}}
-                    {buff}
-                    self->state = {next_state};
-                    continue;
-                    }}
-                   ") 
+            ladder += &format!("
+            case Waiting{has_async} :{{
+                {has_async}_PollResult {has_async}_ret = {has_async}_poll(&self->fn_{has_async});
+                if ({has_async}_ret.status == POLL_PENDING) {{return ret;}}{}{ASSIGN}
+                self->state = {next_state};
+                continue;
+            }}
+                   ",if buff.is_empty(){buff.clone()} else {"\n".to_string()+&buff}) 
                 }
                 else{
 
 
                     ladder += &format!("
-                    case Waiting{has_async}:{{
-                    ret = {has_async}_poll(&self->fn_{has_async});
-                    if (ret.status == POLL_PENDING) return ret;
-                    {buff}
-                    self->fn_{next_fn} = {next_fn}({next_p_buff});
-                    self->state = {next_state};
-                    continue;
-                    }}
-                    ");}
+            case Waiting{has_async} :{{
+                {has_async}_PollResult {has_async}_ret = {has_async}_poll(&self->fn_{has_async});
+                if ({has_async}_ret.status == POLL_PENDING) return ret;{}{ASSIGN}
+                self->fn_{next_fn} = {next_fn}({next_p_buff});
+                self->state = {next_state};
+                continue;
+            }}
+                    ",if buff.is_empty(){buff.clone()} else {"\n".to_string()+&buff});}
 
                     iop +=1;
                     buff.clear();
                 }
-
+                ASSIGN.clear();
         }
 
         /*
@@ -348,13 +345,13 @@ const HASH_SIZE: usize = 5;
         */
 
         ladder += &format!("
-                    case DONE:{{
-                        return ({fn_name}_PollResult){{
-                            .status = POLL_READY,
-                            .result = self->result
-                        }};
-                    }}
-                }}
+            case DONE :{{
+                return ({fn_name}_PollResult){{
+                    .status = POLL_READY,
+                    .result = self->result
+                }};
+            }}
+        }}
         ");
 
         ret.replace("{}", &ladder)
